@@ -1,0 +1,178 @@
+1)
+create tablespace TS_CAMPUS datafile 'ts_campus.dbf' size 4M autoextend on next 256K maxsize 8M;
+-- drop tablespace ts_campus including contents and datafiles; 
+
+2)
+create user CAMPUS identified by campus default tablespace TS_CAMPUS quota unlimited on ts_campus;
+--drop user campus cascade;
+grant connect, create table, create view, create procedure to CAMPUS; 
+
+3)
+--ejecutar script desde campus
+--conectarse desde system o darle privilegios de crear rol(en mi caso system)
+
+4)
+create role R_PROFESOR;
+create role R_ALUMNO;
+create role R_ADMINISTRATIVO;
+
+5)
+--desde campus
+grant select, insert, UPDATE, delete on CAMPUS.USUARIOS to R_ADMINISTRATIVO;
+grant select, insert, UPDATE, delete on CAMPUS.ASIGNATURAS to R_ADMINISTRATIVO;
+grant insert, UPDATE, delete on CAMPUS.MATRICULA to R_ADMINISTRATIVO;
+
+create or replace view CAMPUS.vAdmin as select M.NOTA, M.CALIFICACION, ASG.NOMBRE Asigntura, ASG.AÑO, U.DNI, U.NOMBRE, U.APELLIDOS, U.CIUDAD, U.PAIS, U.EMAIL, U.DESCRIPCION, U.IMAGEN, U.DESC_IMAGEN, U.INTERESES
+	from (MATRICULA M JOIN ASIGNATURAS ASG ON (M.COD_ASIGNATURA = ASG.COD_ASIGNATURA))
+      	JOIN USUARIOS U ON (M.COD_USUARIO = U.COD_USUARIO);
+GRANT SELECT ON CAMPUS.vAdmin TO R_ADMINISTRATIVO;
+
+6)
+GRANT SELECT, INSERT, DELETE, UPDATE ON CAMPUS.ACTIVIDADES TO R_PROFESOR;
+GRANT SELECT, INSERT, DELETE, UPDATE ON CAMPUS.PREGUNTAS TO R_PROFESOR;
+grant insert on CAMPUS.grupos to R_PROFESOR;
+GRANT INSERT, UPDATE (NOTA, CALIFICACION) ON CAMPUS.MATRICULA TO R_PROFESOR;
+alter table Respuesta add NOTA NUMBER(2);
+grant update (NOTA) on CAMPUS.RESPUESTA to R_PROFESOR;
+7)
+--desde system, como antes, o damos permiso o lo hacemos desde system
+GRANT CONNECT TO R_ALUMNO;
+--desde campus
+ALTER TABLE USUARIOS ADD USUARIO_ORACLE VARCHAR2(20);
+ALTER TABLE USUARIOS ADD CLAVE_ORACLE VARCHAR2(20);
+
+--desde system   
+create or replace
+PROCEDURE CAMPUS.ORACLE_PROCEDURE authid current_user as
+   CURSOR C1 IS SELECT campus.usuarios.USUARIO_ORACLE, campus.usuarios.dni FROM campus.USUARIOS;
+   Vnom campus.usuarios.usuario_oracle%Type;
+   Vdni campus.usuarios.dni%Type;
+   Aux  varchar2(100);
+   statement varchar2(100);
+   BEGIN
+   OPEN C1;
+   LOOP
+   FETCH C1 INTO Vnom, Vdni;
+   EXIT WHEN C1%NOTFOUND;
+   IF(Vnom IS null)THEN
+      aux := concat('ABD', Vdni);
+      UPDATE campus.USUARIOS SET campus.usuarios.usuario_oracle =aux, campus.usuarios.clave_oracle = aux WHERE campus.usuarios.dni = Vdni;
+      statement := 'CREATE USER '|| aux ||' IDENTIFIED BY '||aux;
+      dbms_output.put_line(statement);
+      EXECUTE IMMEDIATE statement;
+      statement := 'GRANT R_ALUMNO TO '|| aux;
+      dbms_output.put_line(statement);
+      EXECUTE IMMEDIATE statement;  
+   END IF;
+   END LOOP;
+   CLOSE C1;
+   END;
+--ejecutamos desde campus
+
+CREATE VIEW DATOS_PERSONALES AS (SELECT U.COD_USUARIO,U.DNI,U.NOMBRE,
+   U.APELLIDOS,U.CIUDAD,U.PAIS,U.EMAIL,U.DESCRIPCION,U.IMAGEN,U.DESC_IMAGEN,U.INTERESES,U.USUARIO_ORACLE
+   FROM CAMPUS.MATRICULA M, CAMPUS.USUARIOS U, CAMPUS.ASIGNATURAS ASI, CAMPUS.TITULACIONES T 
+   WHERE M.COD_ASIGNATURA = ASI.COD_ASIGNATURA AND M.COD_USUARIO = U.COD_USUARIO 
+   AND ASI.COD_TITULACION = T.COD_TITULACION AND U.USUARIO_ORACLE LIKE USER);
+
+GRANT SELECT ON CAMPUS.DATOS_PERSONALES TO R_ALUMNO;
+
+CREATE VIEW V_RESULTADO AS (SELECT u.COD_USUARIO Cod_Usu, DNI, u.NOMBRE Alumno, APELLIDOS, CIUDAD, PAIS, EMAIL, DESCRIPCION, IMAGEN, DESC_IMAGEN, INTERESES, texto, respuesta FROM 
+USUARIOS u, RESPUESTA r, PREGUNTAS p WHERE u.COD_USUARIO = r.COD_USUARIO AND r.COD_PREGUNTA = p.COD_PREGUNTA AND usuario_oracle = USER);
+
+GRANT INSERT ON CAMPUS.V_RESULTADO TO R_ALUMNO;
+
+Grant select on campus.DATOS_PERSONALES to R_Alumno;
+
+
+8)
+CREATE TABLE CONEXIONES (SESIONID NUMBER, USUARIO VARCHAR2(50 BYTE), IP VARCHAR2(20 BYTE), MAQUINA VARCHAR2(10 BYTE), INICIO DATE, FIN DATE);
+
+--desde system , porque campus no tiene privilegios para crear triggers
+CREATE OR REPLACE TRIGGER CAMPUS.CONEXION_ON
+   AFTER LOGON ON DATABASE 
+   BEGIN INSERT INTO CAMPUS.CONEXIONES (SESIONID, USUARIO, IP, MAQUINA, INICIO)
+   VALUES((SYS_CONTEXT('USERENV','SESSIONID')), (SYS_CONTEXT('USERENV','SESSION_USER')),
+   (SYS_CONTEXT('USERENV','IP_ADDRESS')), (SYS_CONTEXT('USERENV','HOST')), (SYSDATE));
+   END;
+
+ CREATE OR REPLACE TRIGGER CAMPUS.CONEXION_OFF
+   BEFORE LOGOFF ON DATABASE
+   BEGIN
+   UPDATE CAMPUS.CONEXIONES 
+   SET FIN = (SELECT SYSDATE FROM DUAL) WHERE SESIONID = (SYS_CONTEXT('USERENV','SESSIONID')) 
+   AND USUARIO = (SYS_CONTEXT('USERENV','SESSION_USER')) 
+   AND IP = (SYS_CONTEXT('USERENV','IP_ADDRESS')) 
+   AND MAQUINA = (SYS_CONTEXT('USERENV','HOST'));
+   END;
+
+9)
+--si ocurre un error al entrar en campus, desde system hacer
+alter table campus.conexiones modify maquina varchar2(50);
+--desde system , por lo mismo
+CREATE USER ALUMNO IDENTIFIED BY alumno DEFAULT TABLESPACE TS_CAMPUS;
+
+GRANT R_ALUMNO TO ALUMNO;
+
+CREATE USER ADMINISTRADOR IDENTIFIED BY administrador DEFAULT TABLESPACE TS_CAMPUS;
+
+GRANT R_ADMINISTRATIVO TO ADMINISTRADOR;
+
+CREATE USER PROFESOR IDENTIFIED BY profesor DEFAULT TABLESPACE TS_CAMPUS;
+
+GRANT R_PROFESOR TO PROFESOR;
+
+
+--------------------------------------------------------------------------------------------------------------
+--Parte 2
+
+--desde campus
+CREATE TABLE T_PERMISOS (USUARIO VARCHAR2(30) ,OBJETO VARCHAR2(30), FECHA DATE, PERMISO VARCHAR2(30), ACTIVO NUMBER(1));
+--desde system
+CREATE USER USU1 IDENTIFIED BY USU1;
+--desde campus
+INSERT INTO T_PERMISOS VALUES ('USU1','V_PERMISOS','20-05-2013','SELECT',1);
+INSERT INTO T_PERMISOS VALUES ('USU2','V_RESULTADO','22-05-2013','INSERT',1);
+INSERT INTO T_PERMISOS VALUES ('USU1','V_PERMISOS','23-05-2013','SELECT',0);
+CREATE USER USU2 IDENTIFIED BY USU2;
+CREATE VIEW V_PERMISOS AS SELECT USUARIO,OBJETO,FECHA,PERMISO,ACTIVO FROM T_PERMISOS;
+CREATE VIEW V_RESULTADO AS SELECT USUARIO,OBJETO,FECHA,PERMISO,ACTIVO FROM T_PERMISOS;
+
+--conectarse como admin
+system as bd
+--es irse al lado de local y predeterminar sysabd
+
+GRANT SELECT ON DBA_TAB_PRIVS TO CAMPUS;
+
+--cambiar sysabd, y meterse en campus
+
+
+--ver este de aqui
+create or replace 
+PROCEDURE concede_permisos AS
+CURSOR C1 is SELECT usuario,objeto,permiso,activo FROM V_PERMISOS order by fecha desc;
+Vuser    v_permisos.usuario%Type;
+Vobj     v_permisos.objeto%Type;
+Vpermiso v_permisos.permiso%Type;
+Vactivo  v_permisos.activo%Type;
+Aux      varchar2(200);
+Aux1     varchar2(200);
+BEGIN
+OPEN C1;
+LOOP
+FETCH C1 INTO Vuser,Vobj,Vpermiso,Vactivo;
+EXIT WHEN C1%NOTFOUND;
+ EXECUTE IMMEDIATE('select * from DBA_TAB_PRIVS where grantee like UPPER('||Vuser||') and privilege like UPPER('||Vpermiso||')') into Aux;
+  dbms_output.put_line(Aux);
+IF((Aux is null) and (Vactivo = 1 )) THEN 
+     Aux1 := 'GRANT '||Vpermiso||' ON '||Vobj||' TO '||Vuser;
+     dbms_output.put_line(Aux1);
+     EXECUTE IMMEDIATE(Aux1);
+ELSIF ((Aux is not null) and (Vactivo = 0 )) THEN
+      Aux1 := 'REVOKE '||Vpermiso||' ON '||Vobj||' FROM '||Vuser;
+      dbms_output.put_line(Aux1);
+      EXECUTE IMMEDIATE(Aux1);
+END IF;
+END LOOP;
+CLOSE C1;
+END;
